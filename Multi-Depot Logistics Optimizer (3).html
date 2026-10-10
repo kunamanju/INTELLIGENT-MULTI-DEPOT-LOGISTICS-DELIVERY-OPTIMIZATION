@@ -1,0 +1,166 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Multi-Depot Logistics Optimizer</title><style>
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
+*{box-sizing:border-box}body{margin:0;background:#0b1220;color:#e6edf7;font:13px system-ui,sans-serif;padding:10px}
+h1{font-size:18px;margin:0}h3{margin:0 0 6px;font-size:13px;color:#38bdf8}.sub{color:#8aa0bd}
+.bar{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;align-items:center}
+button{background:#1e2b45;color:#e6edf7;border:1px solid #2d3f63;border-radius:6px;padding:6px 9px;cursor:pointer}button:hover{background:#2b3f66}button.s{border-color:#38bdf8}
+input,select{background:#0f1729;color:#e6edf7;border:1px solid #2d3f63;border-radius:5px;padding:4px;width:58px}select{width:auto}
+.g{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));margin-top:10px}
+.c{background:#131c2e;border:1px solid #223150;border-radius:10px;padding:10px;overflow:auto;max-height:540px}
+#k{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px}.kp{background:#131c2e;border:1px solid #223150;border-radius:8px;padding:8px}.kp b{display:block;font-size:18px}.kp span{color:#8aa0bd;font-size:11px}
+table{border-collapse:collapse;width:100%}th,td{padding:3px 6px;text-align:left;border-bottom:1px solid #1e2b45;white-space:nowrap}th{color:#8aa0bd}
+.bad{color:#f87171}.ok{color:#4ade80}.warn{color:#fbbf24}svg{width:100%;background:#0a0f1c;border-radius:8px}
+#log div{padding:2px 0;border-bottom:1px solid #1a2540}details{margin-top:10px}li{margin:3px 0}
+</style></head><body>
+<h1>Multi-Depot Logistics &amp; Delivery Optimizer</h1>
+<div class="sub" id="st"></div>
+<div class="bar">Seed<input id="seed" value="42"> Orders<input id="n" value="30">
+<button onclick="gen()">Generate sample data</button><button class="s" onclick="act('manual optimize',()=>{})">Optimize routes</button>
+<button onclick="advance(60)">Advance clock +60 min</button><button class="s" id="pl" onclick="play()">▶ Play simulation</button>Speed<select id="sp"><option value="2">2 min/s</option><option value="5" selected>5 min/s</option><option value="10">10 min/s</option><option value="20">20 min/s</option></select><button onclick="document.getElementById('cmp').scrollIntoView()">Compare baseline vs optimized</button><button onclick="selfTest()">Run self-tests</button><button onclick="gen(42,30)">Reset</button></div>
+<div class="bar">Add order x<input id="ox" value="20"> y<input id="oy" value="20"> qty<input id="oq" value="10"> due in (min)<input id="ol" value="90">
+<button onclick="addUI()">Add customer order</button><button onclick="act('traffic',trafficEv)">Simulate traffic delay</button><button onclick="act('breakdown',breakdown)">Trigger vehicle breakdown</button><button onclick="act('shortage',()=>shortage(.5,0))">Reduce depot stock</button></div>
+<div class="bar"><b>Stress tests:</b><button class="s" onclick="sc1()">1 NORMAL</button><button class="s" onclick="sc2()">2 ORDER RUSH</button><button class="s" onclick="sc3()">3 VEHICLE BREAKDOWN</button><button class="s" onclick="sc4()">4 DEPOT SHORTAGE</button><button class="s" onclick="sc5()">5 MULTIPLE EVENTS</button></div>
+<div id="k"></div>
+<div class="g"><div class="c"><h3>Live route map (simulated km grid)</h3><div id="map"></div></div>
+<div class="c" id="cmp"></div><div class="c"><h3>Depot inventory</h3><div id="dep"></div><h3 style="margin-top:10px">Recommendations (rule-based)</h3><div id="rec"></div></div></div>
+<div class="g"><div class="c"><h3>Vehicles</h3><div id="veh"></div></div><div class="c"><h3>Event console / timeline</h3><div id="log"></div></div><div class="c"><h3>Invariant validation</h3><div id="val"></div></div></div>
+<div class="c" style="margin-top:10px;max-height:480px"><h3>Orders</h3><div class="bar" style="margin:0 0 6px">Depot<select id="fd" onchange="render()"></select> Vehicle<select id="fv" onchange="render()"></select> Status<select id="fs" onchange="render()"></select></div><div id="ord"></div></div>
+<details class="c" style="max-height:none"><summary>Assumptions, complexity, demo workflow</summary><ul>
+<li><b>Simulated travel</b> (no road data): time = Euclidean km × 1.3 road factor ÷ speed × traffic multiplier. Matrix is computed on demand, not stored.</li>
+<li>Clock starts 08:00 (minute 0). Service = 5 min. Early arrival waits for the window. Return to depot is billed only while stops remain pending. Capacity applies to a vehicle's pending load (one trip).</li>
+<li>Cost = km × vehicle cost/km + 2 per late minute + 500 per unserved order (all configurable in <code>C</code>). Same model scores baseline and optimized. Both are <b>heuristics</b>, not provably optimal. Negative improvement is shown as-is.</li>
+<li>Optimized: orders sorted by deadline → cheapest feasible insertion (vehicle, position; stock- and capacity-aware; +3 stability penalty for moving an order off its previous vehicle) → bounded 2-opt (≤5 passes). Complexity ≈ O(n·V·L²) insertion + O(5·V·L³) 2-opt, L = stops per route. Baseline: nearest feasible depot + nearest-neighbour, O(n·D log D + V·L²).</li>
+<li>Rule-based optimization only; no machine learning or prediction. Replan keeps delivered orders, releases all unfinished ones and re-solves them (unaffected ones tend to stay due to the stability penalty).</li>
+<li><b>Demo:</b> 1 NORMAL → compare panel → 2 RUSH (see unserved + reasons) → 3 BREAKDOWN (before/after routes in vehicle table) → 4 SHORTAGE → 5 MULTIPLE → Add order live → Run self-tests.</li></ul></details>
+<script>
+const $=s=>document.querySelector(s),C={late:2,un:500,stab:3,svc:5,road:1.3},COL=['#38bdf8','#f472b6','#4ade80','#fbbf24','#a78bfa','#fb923c'];
+let S,TEST=[],PL=null,SEL=null;
+const rng=a=>()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const fmt=m=>{m=Math.round(m);return String(8+Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')},f0=x=>x.toFixed(0),f1=x=>x.toFixed(1);
+const D=(a,b,c,d)=>Math.hypot(a-c,b-d)*C.road,dp=v=>S.depots.find(d=>d.id==v.dep);
+const alloc=d=>S.orders.filter(o=>!o.done&&o.dep==d.id).reduce((a,o)=>a+o.q,0);
+function init(seed,n){SEL=null;if(PL){clearInterval(PL);PL=null;$('#pl').textContent='▶ Play simulation'}S={seed,moved:false,r:rng(seed),now:0,traffic:1,ev:[],n:0,sunk:{d:0,drive:0,late:0},orders:[],done:new Set(),planned:false,depots:[[8,8],[32,10],[20,32]].map((p,i)=>({id:'D'+(i+1),x:p[0],y:p[1],init:200,used:0,cut:false})),vehicles:[]};
+let k=0;for(const d of S.depots)for(let j=0;j<2;j++){S.vehicles.push({id:'V'+(k+1),col:COL[k],dep:d.id,x:d.x,y:d.y,t0:0,cap:j?80:60,cpk:j?1.5:1,spd:j?50:40,ok:true,route:[],e:null});k++}
+for(let i=0;i<n;i++){const e=Math.floor(S.r()*240);add(S.r()*40,S.r()*40,5+Math.floor(S.r()*16),e,e+60+Math.floor(S.r()*90))}
+S.opt=S.base=met({R:{},un:[]});}
+function add(x,y,q,e,l){const o={id:'O'+(++S.n),x:+(+x).toFixed(1),y:+(+y).toFixed(1),q,e,l,dep:null,veh:null,st:'New',reason:'',arr:null,done:false,prev:null,why:''};S.orders.push(o);return o}
+function log(m,c=''){S.ev.unshift({t:fmt(S.now),m,c});if(S.ev.length>200)S.ev.pop()}
+// route evaluation: distance, service-start times (after waiting), late minutes, cost, finish time
+function ev(v,r){let x=v.x,y=v.y,t=S.moved?v.t0:Math.max(v.t0,S.now),s0=t,d=0,late=0;const arr=[],k=60*S.traffic/v.spd;
+for(const o of r){const g=D(x,y,o.x,o.y);d+=g;t+=g*k;const s=Math.max(t,o.e);arr.push(s);late+=Math.max(0,s-o.l);t=s+C.svc;x=o.x;y=o.y}
+if(r.length){const h=dp(v),g=D(x,y,h.x,h.y);d+=g;t+=g*k}return{d,late,cost:d*v.cpk+late*C.late,arr,t,s0}}
+function why(o,vs,rem){if(!vs.length)return'No available vehicles';const mc=Math.max(...vs.map(v=>v.cap));if(o.q>mc)return'Quantity '+o.q+' exceeds largest available vehicle capacity ('+mc+')';
+if(!vs.some(v=>rem[v.dep]>=o.q))return'Insufficient depot inventory (max remaining '+Math.max(...Object.values(rem))+')';return'Vehicle capacity exhausted at depots with stock'}
+function solve(mode){const pend=S.orders.filter(o=>!o.done),vs=S.vehicles.filter(v=>v.ok),rem={},cap={},R={},un=[];
+S.depots.forEach(d=>rem[d.id]=d.init-d.used);S.vehicles.forEach(v=>{R[v.id]=[];cap[v.id]=v.cap});
+if(mode=='opt'){const ord=[...pend].sort((a,b)=>a.l-b.l||a.e-b.e);
+for(const o of ord){let best=null,skip=0;
+for(const v of vs){if(rem[v.dep]<o.q||cap[v.id]<o.q){skip++;continue}const r=R[v.id],b=ev(v,r).cost;
+for(let i=0;i<=r.length;i++){const t=r.slice();t.splice(i,0,o);const c=ev(v,t).cost-b+(o.prev&&o.prev!=v.id?C.stab:0);if(!best||c<best.c)best={c,v,i}}}
+if(best&&best.c<=C.un){R[best.v.id].splice(best.i,0,o);rem[best.v.dep]-=o.q;cap[best.v.id]-=o.q;o.why=`${best.v.id}@${best.v.dep}: cheapest of ${vs.length-skip} feasible vehicles (+${f1(best.c)} cost); ${skip} skipped (stock/capacity)`}
+else un.push([o,best?'Deadline infeasible: marginal cost '+f0(best.c)+' exceeds unserved penalty':why(o,vs,rem)])}
+for(const v of vs){const r=R[v.id];let imp=true,p=0;while(imp&&p++<5){imp=false;let bc=ev(v,r).cost;
+for(let i=0;i<r.length-1;i++)for(let j=i+1;j<r.length;j++){const t=r.slice(0,i).concat(r.slice(i,j+1).reverse(),r.slice(j+1)),c=ev(v,t).cost;if(c<bc-1e-9){r.splice(0,r.length,...t);bc=c;imp=true}}}}
+}else{for(const o of pend){const ds=[...S.depots].sort((a,b)=>D(o.x,o.y,a.x,a.y)-D(o.x,o.y,b.x,b.y));let ok=0;
+for(const d of ds){if(rem[d.id]<o.q)continue;const c=vs.filter(v=>v.dep==d.id&&cap[v.id]>=o.q).sort((a,b)=>cap[b.id]-cap[a.id])[0];if(c){R[c.id].push(o);rem[d.id]-=o.q;cap[c.id]-=o.q;ok=1;break}}
+if(!ok)un.push([o,why(o,vs,rem)])}
+for(const v of vs){const l=R[v.id],out=[];let x=v.x,y=v.y;while(l.length){let bi=0,bd=1e9;l.forEach((o,i)=>{const g=D(x,y,o.x,o.y);if(g<bd){bd=g;bi=i}});const o=l.splice(bi,1)[0];out.push(o);x=o.x;y=o.y}R[v.id]=out}}
+return{R,un}}
+function met(P){let d=S.sunk.d,drive=S.sunk.drive,late=S.sunk.late,routes=0,lateN=S.orders.filter(o=>o.done&&o.st=='Late').length,srv=S.orders.filter(o=>o.done).length;
+for(const v of S.vehicles){const r=P.R[v.id]||[];if(!r.length)continue;routes++;const e=ev(v,r);d+=e.d;drive+=e.d*v.cpk;late+=e.late;srv+=r.length;lateN+=e.arr.filter((a,i)=>a>r[i].l).length}
+const lp=late*C.late,up=P.un.length*C.un;return{d,drive,late,lp,up,tot:drive+lp+up,srv,lateN,un:P.un.length,routes,ot:srv?(srv-lateN)/srv*100:0}}
+function apply(P){for(const v of S.vehicles){v.route=P.R[v.id];v.e=ev(v,v.route);v.route.forEach((o,i)=>{o.veh=v.id;o.dep=v.dep;o.arr=v.e.arr[i];o.st=o.arr>o.l?'Late':'Scheduled';o.reason=''})}
+for(const[o,r]of P.un){o.veh=o.dep=o.arr=null;o.st='Unserved';o.reason=r}}
+function replan(label){const t=performance.now();S.orders.forEach(o=>o.prev=o.done?null:o.veh);const O=solve('opt'),B=solve('base');apply(O);S.opt=met(O);S.base=met(B);S.ms=performance.now()-t;S.planned=true;
+const mv=S.orders.filter(o=>o.prev&&o.veh&&o.prev!=o.veh).length,pre=S.bM;if(pre)S.pre=pre;
+log(`REPLAN (${label}): ${S.opt.un} unserved, ${S.opt.lateN} late, ${mv} orders moved vehicle, cost ${f0(S.opt.tot)}${pre?' (was '+f0(pre.tot)+')':''}, ${S.ms.toFixed(1)} ms`,'ok');S.bM=null;render()}
+function act(label,fn){if(S.moved)snap();S.bR={};S.vehicles.forEach(v=>S.bR[v.id]=v.route.map(o=>o.id));S.bM=S.opt;fn();replan(label)}
+function advance(m){S.now+=m;let n=0;for(const v of S.vehicles){if(!v.ok||!v.e)continue;const r=v.route;
+while(r.length&&v.e.arr[0]+C.svc<=S.now){const o=r.shift(),a=v.e.arr.shift(),g=D(v.x,v.y,o.x,o.y),lt=Math.max(0,a-o.l);S.sunk.d+=g;S.sunk.drive+=g*v.cpk;S.sunk.late+=lt;
+o.done=true;o.st=lt>0?'Late':'Delivered';o.arr=a;v.x=o.x;v.y=o.y;v.t0=a+C.svc;S.depots.find(d=>d.id==v.dep).used+=o.q;S.done.add(o.id);n++}}
+log(`CLOCK +${m} min → ${n} deliveries completed (kept through replans)`);replan('clock advanced')}
+function breakdown(){const c=S.vehicles.filter(v=>v.ok&&v.route.length).sort((a,b)=>b.route.length-a.route.length)[0]||S.vehicles.find(v=>v.ok);if(!c)return log('No vehicle left to break','bad');
+c.ok=false;log(`BREAKDOWN ${c.id} at (${f0(c.x)},${f0(c.y)}): ${c.route.length} unfinished deliveries released; completed ones kept`,'bad');c.route.forEach(o=>o.st='Replanning required');c.route=[]}
+function shortage(f,k){const d=[...S.depots].sort((a,b)=>alloc(b)-alloc(a))[k];const av=d.init-d.used;d.init=d.used+Math.floor(av*f);d.cut=true;log(`SHORTAGE ${d.id}: available stock ${av} → ${d.init-d.used}`,'bad')}
+function trafficEv(){S.traffic=Math.min(3,+(S.traffic*1.5).toFixed(2));log(`TRAFFIC: all travel times now ×${S.traffic}`,'warn')}
+function addUI(){const q=+$('#oq').value,x=+$('#ox').value,y=+$('#oy').value,l=+$('#ol').value;act('new order',()=>{const o=add(x,y,q,S.now,S.now+l);log(`NEW ORDER ${o.id}: qty ${q} at (${x},${y}), due ${fmt(o.l)}`,'warn')})}
+const ready=()=>{if(!S.planned)sc1()};
+function gen(s,n){init(s||+$('#seed').value||42,n??(+$('#n').value||30));log(`Generated seed ${S.seed}: ${S.orders.length} orders, 3 depots, 6 vehicles. Press Optimize.`);render()}
+function sc1(){init(+$('#seed').value||42,30);log('SCENARIO 1 NORMAL: 30 static orders, full fleet, standard stock');replan('NORMAL')}
+function sc2(){ready();act('ORDER RUSH',()=>{for(let i=0;i<20;i++){const e=S.now+Math.floor(S.r()*30);add(S.r()*40,S.r()*40,8+Math.floor(S.r()*13),e,e+45+Math.floor(S.r()*60))}log('SCENARIO 2 ORDER RUSH: +20 orders injected','warn')})}
+function sc3(){ready();if(!S.orders.some(o=>o.done))advance(90);act('VEHICLE BREAKDOWN',breakdown)}
+function sc4(){ready();act('DEPOT SHORTAGE',()=>{shortage(.3,0);shortage(.6,1)})}
+function sc5(){ready();act('MULTIPLE EVENTS',()=>{log('SCENARIO 5: simultaneous events','warn');breakdown();for(let i=0;i<6;i++)add(S.r()*40,S.r()*40,6+Math.floor(S.r()*10),S.now,S.now+45);log('6 urgent orders (due in 45 min)','warn');shortage(.5,0);trafficEv()})}
+function validate(){if(!S.planned)return[];const v=[],ok=(n,c,d='')=>v.push([n,!!c,d]),ids=S.vehicles.flatMap(x=>x.route.map(o=>o.id));
+ok('1 Every order completed, assigned or flagged',S.orders.every(o=>o.done||o.veh||(o.st=='Unserved'&&o.reason)));
+ok('2 No order planned twice or re-delivered',new Set(ids).size==ids.length&&ids.every(i=>!S.done.has(i)));
+ok('3 Vehicle capacity respected',S.vehicles.every(x=>x.route.reduce((a,o)=>a+o.q,0)<=x.cap));
+ok('4 Depot inventory never negative',S.depots.every(d=>d.init-d.used-alloc(d)>=0));
+ok('5 Broken vehicles hold no orders',S.vehicles.every(x=>x.ok||!x.route.length));
+ok('6 Completed deliveries preserved',[...S.done].every(i=>S.orders.find(o=>o.id==i).done));
+const m=met({R:Object.fromEntries(S.vehicles.map(x=>[x.id,x.route])),un:S.orders.filter(o=>o.st=='Unserved')});
+ok('7 Reported cost = recomputed cost (same units)',Math.abs(m.tot-S.opt.tot)<1e-6,f1(m.tot));return v}
+function selfTest(){const R=[],ck=(n,c,d='')=>R.push([n,!!c,d]),V=()=>validate().every(x=>x[1]),sd=+$('#seed').value||42;
+sc1();ck('Normal, 30 orders, invariants',S.orders.length==30&&V(),'cost '+f0(S.opt.tot));const t1=S.opt.tot;
+sc1();ck('Repeat run, same seed → identical cost',S.opt.tot==t1,f1(t1));ck('Baseline on same dataset',isFinite(S.base.tot),`base ${f0(S.base.tot)} vs opt ${f0(S.opt.tot)}`);
+sc2();ck('Rush +20 orders, invariants',S.orders.length==50&&V(),S.opt.un+' unserved flagged');
+sc1();sc3();const dn=S.orders.filter(o=>o.done).length,bv=S.vehicles.find(v=>!v.ok);ck('Breakdown: vehicle disabled, completed kept',!!bv&&!bv.route.length&&dn>0&&V(),dn+' completed');
+sc1();sc4();ck('Depot shortage, invariants',V(),S.opt.un+' unserved');
+sc1();sc5();ck('Multiple events, invariants',V(),'cost '+f0(S.opt.tot));
+sc1();act('impossible order',()=>add(5,5,999,S.now,S.now+60));const imp=S.orders[S.orders.length-1];ck('Impossible order flagged with reason',imp.st=='Unserved'&&imp.reason,imp.reason);
+init(sd,0);replan('boundary');act('boundary',()=>{add(10,10,80,0,200);add(12,12,81,0,200)});const bo=S.orders;ck('Capacity boundary: 80 served, 81 flagged',bo[0].veh&&bo[1].st=='Unserved'&&V());
+sc1();addUI();ck('Live order added while running',S.orders.length==31&&V());
+sc1();TEST=R;log('Self-tests finished; reset to NORMAL','ok');render()}
+// Vehicle position at sim time S.now, interpolated along its planned route (travel → wait/service → next leg → return)
+function pos(v){if(!v.ok||!v.e||!v.route.length)return[v.x,v.y,0];const k=60*S.traffic/v.spd,r=v.route,A=(a,b,c,d)=>Math.atan2(d-b,c-a)*180/Math.PI;let s=v.e.s0,px=v.x,py=v.y;
+for(let i=0;i<r.length;i++){const o=r[i],te=s+D(px,py,o.x,o.y)*k,a=A(px,py,o.x,o.y);if(S.now<te){const f=te>s?(S.now-s)/(te-s):1;return[px+(o.x-px)*f,py+(o.y-py)*f,a]}if(S.now<v.e.arr[i]+C.svc)return[o.x,o.y,a];s=v.e.arr[i]+C.svc;px=o.x;py=o.y}
+const h=dp(v),te=s+D(px,py,h.x,h.y)*k,a=A(px,py,h.x,h.y);if(S.now<te){const f=te>s?(S.now-s)/(te-s):1;return[px+(h.x-px)*f,py+(h.y-py)*f,a]}return[h.x,h.y,a]}
+function snap(){for(const v of S.vehicles){if(!v.ok)continue;const p=pos(v);v.x=p[0];v.y=p[1];v.t0=S.now}}
+function play(){if(PL){clearInterval(PL);PL=null;$('#pl').textContent='▶ Play simulation';return}
+if(!S.planned)sc1();S.moved=true;S.vehicles.forEach(v=>v.t0=Math.max(v.t0,S.now));replan('simulation started');log('SIMULATION running: vehicles drive their planned routes; events can be injected live','ok');PL=setInterval(tick,100);$('#pl').textContent='⏸ Pause'}
+function tick(){S.now+=+$('#sp').value*.1;let n=0;
+for(const v of S.vehicles){if(!v.ok||!v.e)continue;const r=v.route;while(r.length&&v.e.arr[0]+C.svc<=S.now){const o=r.shift(),a=v.e.arr.shift(),g=D(v.x,v.y,o.x,o.y),lt=Math.max(0,a-o.l);S.sunk.d+=g;S.sunk.drive+=g*v.cpk;S.sunk.late+=lt;o.done=true;o.st=lt>0?'Late':'Delivered';o.arr=a;v.x=o.x;v.y=o.y;v.t0=a+C.svc;v.e.s0=v.t0;S.depots.find(d=>d.id==v.dep).used+=o.q;S.done.add(o.id);log(`DELIVERED ${o.id} by ${v.id} at ${fmt(a)}${lt>0?' (late '+f0(lt)+' min)':''}`,lt>0?'warn':'ok');n++}}
+if(n){S.opt=met({R:Object.fromEntries(S.vehicles.map(x=>[x.id,x.route])),un:S.orders.filter(o=>o.st=='Unserved')});S.base=met(solve('base'))}
+if(!S.vehicles.some(v=>v.route.length)){play();log('SIMULATION COMPLETE: no pending routed deliveries','ok')}render()}
+function render(){const o=S.opt,b=S.base,imp=b.tot>0?(b.tot-o.tot)/b.tot*100:null,done=S.orders.filter(x=>x.done).length;
+$('#st').textContent=`Sim clock ${fmt(S.now)} | traffic ×${S.traffic} | seed ${S.seed} | last replan ${S.ms?S.ms.toFixed(1)+' ms':'–'} | travel times simulated`;
+const K=[['Total orders',S.orders.length],['Assigned (pending)',S.orders.filter(x=>!x.done&&x.veh).length],['Completed',done],['Unserved',S.orders.filter(x=>x.st=='Unserved').length,'bad'],['Active vehicles',S.vehicles.filter(v=>v.ok).length+'/'+S.vehicles.length],['Distance km',f1(o.d)],['Total cost',f0(o.tot)],['Late deliveries',o.lateN,'warn'],['On-time %',f1(o.ot)+'%'],['vs baseline',imp==null?'n/a':f1(imp)+'%',imp<0?'bad':'ok']];
+$('#k').innerHTML=K.map(k=>`<div class="kp"><span>${k[0]}</span><b class="${k[2]||''}">${k[1]}</b></div>`).join('');
+const T=(h,rows)=>`<table><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
+const row=(n,x,y,fm=f1)=>[n,fm(x),fm(y)];
+$('#cmp').innerHTML=`<h3>Baseline (nearest depot + nearest neighbour) vs Optimized (same data, same cost model)</h3>`+T(['Metric','Baseline','Optimized'],[row('Distance km',b.d,o.d),row('Driving cost',b.drive,o.drive),row('Late penalty',b.lp,o.lp),row('Unserved penalty',b.up,o.up),row('<b>Total cost</b>',b.tot,o.tot),row('On-time %',b.ot,o.ot),row('Unserved',b.un,o.un,f0),row('Routes',b.routes,o.routes,f0)])+`<p><b class="${imp<0?'bad':'ok'}">Improvement: ${imp==null?'n/a':f1(imp)+'%'}</b> = (Base − Opt)/Base×100. Both are heuristics; negative values are reported as computed.</p>`+(S.pre?`<h3>Before → after last event</h3>`+T(['Metric','Before','After'],[row('Total cost',S.pre.tot,o.tot),row('Late min',S.pre.late,o.late,f0),row('Unserved',S.pre.un,o.un,f0),row('Distance',S.pre.d,o.d)]):'');
+$('#dep').innerHTML=T(['Depot','Initial','Delivered','Allocated','Remaining','Flag'],S.depots.map(d=>{const a=alloc(d),r=d.init-d.used-a;return[d.id,d.init,d.used,a,r,d.cut?'<span class=bad>CUT</span>':r<=d.init*.1?'<span class=warn>LOW</span>':'ok']}));
+$('#veh').innerHTML=T(['Veh','Depot','Cap','Load','Km','Done by','Status','Route (before → now)'],S.vehicles.map(v=>[`<b style="color:${v.col}">${v.id}</b>`,v.dep,v.cap,v.route.reduce((a,x)=>a+x.q,0),v.e&&v.ok?f1(v.e.d):'-',v.ok&&v.route.length?fmt(v.e.t):'-',v.ok?'<span class=ok>OK</span>':'<span class=bad>BROKEN</span>',(S.bR&&S.bR[v.id].length?S.bR[v.id].join('>')+' → ':'')+(v.route.map(x=>x.id).join('>')||'-')]));
+const un=S.orders.filter(x=>x.st=='Unserved'),cn=k=>un.filter(x=>x.reason.includes(k)).length,rc=[];
+if(cn('inventory'))rc.push(`${cn('inventory')} orders blocked by inventory → transfer/replenish stock at the depots nearest them.`);
+if(cn('capacity'))rc.push(`${cn('capacity')} orders blocked by capacity → add or repair vehicles.`);if(cn('exceeds'))rc.push(`${cn('exceeds')} orders exceed any vehicle's capacity → split them.`);if(cn('Deadline'))rc.push(`${cn('Deadline')} orders infeasible by deadline → renegotiate windows.`);
+S.vehicles.filter(v=>!v.ok).forEach(v=>rc.push(`Repair ${v.id} first: restores ${v.cap} units of capacity.`));
+const hot=S.vehicles.filter(v=>v.ok&&v.route.reduce((a,x)=>a+x.q,0)>=v.cap*.9);if(hot.length)rc.push('Bottleneck: '+hot.map(v=>v.id).join(', ')+' ≥90% loaded.');
+if(o.lateN)rc.push(`${o.lateN} late deliveries (${f0(o.late)} late min) → dispatch earlier or rebalance routes.`);if(S.traffic>1)rc.push(`Traffic ×${S.traffic} active: consider re-sequencing urgent stops.`);
+$('#rec').innerHTML=(rc.length?rc:['No action needed.']).map(x=>'• '+x).join('<br>');
+$('#log').innerHTML=S.ev.map(e=>`<div class="${e.c}"><b>${e.t}</b> ${e.m}</div>`).join('');
+const V=validate();$('#val').innerHTML=(V.length?V:[['Press Optimize to validate',true]]).map(x=>`<div class="${x[1]?'ok':'bad'}">${x[1]?'✓':'✗ FAIL'} ${x[0]} ${x[2]||''}</div>`).join('')+(TEST.length?'<h3 style="margin-top:8px">Self-tests</h3>'+TEST.map(x=>`<div class="${x[1]?'ok':'bad'}">${x[1]?'✓':'✗'} ${x[0]} <span class=sub>${x[2]}</span></div>`).join(''):'');
+const fd=$('#fd').value,fv=$('#fv').value,fs=$('#fs').value,B={Scheduled:'#38bdf8',Delivered:'#4ade80',Late:'#fbbf24',Unserved:'#f87171'};
+$('#ord').innerHTML=T(['ID','Loc','Qty','Window','Depot','Veh','Arrival','Status','Reason / decision'],S.orders.filter(x=>(fd=='All'||x.dep==fd)&&(fv=='All'||x.veh==fv)&&(fs=='All'||x.st==fs)).map(x=>[x.id,`${x.x},${x.y}`,x.q,fmt(x.e)+'–'+fmt(x.l),x.dep||'-',x.veh||'-',x.arr==null?'-':fmt(x.arr),`<span style="color:${B[x.st]||'#8aa0bd'}">${x.done?'✓ ':''}${x.st}</span>`,`<span class=sub>${x.st=='Unserved'?x.reason:x.done?'completed':x.why}</span>`]));
+map()}
+function map(){let s='<svg viewBox="-3 -3 46 46">';S.vehicles.forEach(v=>v.route.forEach((o,i)=>o._i=i+1));
+for(const v of S.vehicles){if(!v.ok||!v.route.length)continue;const h=dp(v),p=[[v.x,v.y],...v.route.map(o=>[o.x,o.y]),[h.x,h.y]];
+for(let i=0;i<p.length-1;i++){const a=p[i],b=p[i+1],g=Math.atan2(b[1]-a[1],b[0]-a[0])*180/Math.PI;s+=`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${v.col}" stroke-width=".3" ${i==p.length-2?'stroke-dasharray="1 .8" opacity=".6"':''}/><path d="M-.7-.5L.7 0L-.7 .5z" fill="${v.col}" transform="translate(${(a[0]+b[0])/2} ${(a[1]+b[1])/2}) rotate(${g})"/>`}}
+for(const o of S.orders){if(o.st=='Unserved')s+=`<text x="${o.x}" y="${o.y+.6}" fill="#f87171" font-size="2" text-anchor="middle">✖</text>`;
+else if(o.done)s+=`<circle cx="${o.x}" cy="${o.y}" r=".8" fill="none" stroke="#64748b" stroke-width=".25"/>`;
+else{const c=(S.vehicles.find(v=>v.id==o.veh)||{}).col||'#888';s+=`<circle cx="${o.x}" cy="${o.y}" r=".9" fill="${c}"/><text x="${o.x+1}" y="${o.y-.8}" fill="#cbd5e1" font-size="1.3">${o._i||''}</text>`}}
+for(const d of S.depots)s+=`<rect x="${d.x-1.5}" y="${d.y-1.5}" width="3" height="3" fill="#e6edf7"/><text x="${d.x}" y="${d.y+.6}" font-size="1.6" text-anchor="middle" fill="#0b1220" font-weight="700">${d.id}</text>`;
+for(const v of S.vehicles)if(v.ok){const[x,y,a]=pos(v),z=v.cap>70?1.1:.8;s+=`<g transform="translate(${x} ${y})"><g transform="rotate(${a}) scale(${z})"><rect x="-1.2" y="-.6" width="1.7" height="1.2" rx=".2" fill="${v.col}" stroke="#0b1220" stroke-width=".15"/><rect x=".5" y="-.5" width=".8" height="1" rx=".2" fill="#e6edf7"/><circle cx="-.6" cy=".7" r=".25" fill="#0b1220"/><circle cx=".6" cy=".7" r=".25" fill="#0b1220"/></g><text y="-1.2" font-size="1.2" fill="#fff" text-anchor="middle">${v.id}</text></g>`}
+if(SEL){const v=S.vehicles.find(x=>x.id==SEL.id),p=pos(v),nx=v.route[0],ld=v.route.reduce((a,o)=>a+o.q,0),h=dp(v);
+if(v.ok&&v.route.length)s+=`<polyline points="${[p[0]+','+p[1],...v.route.map(o=>o.x+','+o.y),h.x+','+h.y].join(' ')}" fill="none" stroke="${v.col}" stroke-width=".9" opacity=".3"/>`;
+const t=`${v.id} ${v.ok?'':'BROKEN '}${v.cap>70?'truck':'van'} | load ${ld}/${v.cap} | ${v.route.length} stops${nx&&v.ok?' | next '+nx.id+' ETA '+fmt(v.e.arr[0]):''}`;
+s+=`<line x1="${SEL.x}" y1="${SEL.y}" x2="${p[0]}" y2="${p[1]}" stroke="#fff" stroke-width=".25" stroke-dasharray=".8 .5"/><circle cx="${SEL.x}" cy="${SEL.y}" r=".6" fill="#fff"/><circle cx="${p[0]}" cy="${p[1]}" r="2.2" fill="none" stroke="#fff" stroke-width=".25"/><text x="${SEL.x}" y="${SEL.y-1}" font-size="1.4" fill="#fff" stroke="#0a0f1c" stroke-width=".4" paint-order="stroke" text-anchor="${SEL.x>20?'end':'start'}">${t}</text>`}
+for(const v of S.vehicles)if(!v.ok)s+=`<text x="${v.x}" y="${v.y}" fill="#f87171" font-size="2" font-weight="700">✖${v.id}</text>`;
+$('#map').innerHTML=s+'</svg><div class="sub">'+S.vehicles.map(v=>`<span style="color:${v.col}">■ ${v.id}</span>`).join(' ')+' | □ depot | ○ done | ✖ unserved/broken | numbers = stop order, arrows = direction</div>'}
+function filters(){const f=(id,a)=>$(id).innerHTML=['All',...a].map(x=>`<option>${x}</option>`).join('');f('#fd',['D1','D2','D3']);f('#fv',['V1','V2','V3','V4','V5','V6']);f('#fs',['Scheduled','Delivered','Late','Unserved','Replanning required','New'])}
+$('#map').addEventListener('click',e=>{const sv=$('#map svg');if(!sv)return;const p=sv.createSVGPoint();p.x=e.clientX;p.y=e.clientY;const q=p.matrixTransform(sv.getScreenCTM().inverse());let best=null,bd=3.5;
+for(const v of S.vehicles){const c=pos(v),d=Math.hypot(c[0]-q.x,c[1]-q.y);if(d<bd){bd=d;best=v}}
+if(!best){SEL=null;render();return}
+SEL={id:best.id,x:q.x,y:q.y};log(`Tracking ${best.id} from tap at (${f0(q.x)},${f0(q.y)})`);if(!PL&&S.planned)play();else render()});
+filters();sc1();
+</script></body></html>
